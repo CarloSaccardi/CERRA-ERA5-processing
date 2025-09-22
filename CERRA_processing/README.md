@@ -8,7 +8,7 @@ The pipeline processes CERRA data through three main steps:
 
 1. **Download**: Download CERRA data from CDS in Lambert conformal projection
 2. **Projection**: Convert from Lambert to cylindrical (lat-lon) projection for specific regions
-3. **Preprocessing**: Extract and compute meteorological variables, save as numpy arrays
+3. **Preprocessing**: Extract and compute meteorological variables, save as HDF5 files for efficient PyTorch loading
 
 ## Directory Structure
 
@@ -75,19 +75,31 @@ python scripts/cerra_pipeline.py --region iberia --years 2014-2021 --variables b
 python scripts/cerra_pipeline.py --region scandinavia --years 2014,2015,2016 --variables base_variables
 ```
 
+### Download Only (No Region Required)
+
+Download data without processing (useful for downloading all variables once):
+
+```bash
+# Download all variables for 2013
+python scripts/cerra_pipeline.py --years 2013 --skip-projection --skip-preprocessing
+
+# Download with nohup for background processing
+nohup python scripts/cerra_pipeline.py --years 2013 --skip-projection --skip-preprocessing > lambert_proj/2013.log 2>&1 &
+```
+
 ### Individual Steps
 
 You can also run individual steps:
 
 ```bash
-# Step 1: Download data
-python scripts/download_cerra.py --years 2021 --variables base_variables
+# Step 1: Download data (downloads all variables by default)
+python scripts/download_cerra.py --years 2021 --variables all_variables
 
 # Step 2: Project to cylindrical coordinates
 python scripts/project_cerra.py --region central_europe --years 2021
 
-# Step 3: Preprocess data
-python scripts/preprocess_cerra.py --region central_europe --year 2021
+# Step 3: Preprocess data (choose variable subset)
+python scripts/preprocess_cerra.py --region central_europe --year 2021 --variables base_variables
 ```
 
 ## Configuration
@@ -104,9 +116,9 @@ The pipeline supports three predefined regions:
 
 Three variable groups are predefined:
 
-- **base_variables**: Core variables (u10, v10, t2m, momentum fluxes, sensible heat flux)
-- **additional_variables**: Additional variables (relative humidity, surface pressure)
-- **all_variables**: All available variables
+- **base_variables**: Core variables (u10, v10, t2m) - 3 variables
+- **additional_variables**: Additional variables (momentum fluxes, sensible heat flux, surface pressure) - 4 variables  
+- **all_variables**: All available variables (u10, v10, t2m, momentum fluxes, sensible heat flux, surface pressure) - 7 variables
 
 ### Custom Variables
 
@@ -120,25 +132,44 @@ python cerra_pipeline.py --region central_europe --years 2021 --variables 10m_wi
 
 ### Processed Data Format
 
-The preprocessing step generates:
+The preprocessing step generates HDF5 files for efficient PyTorch loading:
 
-1. **Time series files**: `nwp_YYYYMMDDHH.npy` - One file per time step
-   - Shape: `(height, width, 5)` where 5 variables are:
-     - `u10`: 10m eastward wind component (m/s)
-     - `v10`: 10m northward wind component (m/s)  
-     - `t2m`: 2m temperature (K)
-     - `sshf`: Surface sensible heat flux (W/m²)
-     - `zust`: Friction velocity (m/s)
+1. **Main data file**: `{region}_cerra_data.h5`
+   - Contains time series data with shape `(N, height, width, variables)`
+   - For `base_variables`: `(N, 368, 368, 3)` with u10, v10, t2m
+   - For `all_variables`: `(N, 368, 368, 7)` with all available variables
+   - Organized in train/val/test splits
 
-2. **Coordinate grid**: `nwp_xy.npy`
-   - Shape: `(2, height, width)`
-   - Contains longitude and latitude arrays
+2. **Static data file**: `{region}_cerra_static.h5`
+   - Contains coordinate grid: `nwp_xy` with shape `(2, height, width)`
+   - Contains normalization parameters: `parameter_mean.pt` and `parameter_std.pt`
 
 ### Output Locations
 
 - **Central Europe**: `data/CentralEurope/CERRA/samples/`
 - **Iberia**: `data/iberia/CERRA/samples/`
 - **Scandinavia**: `data/scandinavia/CERRA/samples/`
+
+### HDF5 Dataset Usage
+
+For PyTorch training, use the provided `CERRAHDF5DataModule`:
+
+```python
+from hdf5_dataset import CERRAHDF5DataModule
+
+# Load HDF5 data
+data_module = CERRAHDF5DataModule(
+    data_dir="data/CentralEurope/CERRA/samples/",
+    batch_size=32,
+    train_split=0.7,
+    val_split=0.15
+)
+
+# Get data loaders
+train_loader = data_module.train_dataloader()
+val_loader = data_module.val_dataloader()
+test_loader = data_module.test_dataloader()
+```
 
 ## Advanced Usage
 
@@ -152,6 +183,12 @@ python scripts/cerra_pipeline.py --region central_europe --years 2021 --skip-dow
 
 # Skip projection (use existing cylindrical projection data)
 python scripts/cerra_pipeline.py --region central_europe --years 2021 --skip-projection
+
+# Skip preprocessing (use existing processed data)
+python scripts/cerra_pipeline.py --region central_europe --years 2021 --skip-preprocessing
+
+# Download only (no region required)
+python scripts/cerra_pipeline.py --years 2021 --skip-projection --skip-preprocessing
 ```
 
 ### Check Prerequisites
@@ -170,6 +207,9 @@ python scripts/project_cerra.py --region central_europe --years 2021 --input-dir
 
 # Custom input directory for preprocessing
 python scripts/preprocess_cerra.py --region central_europe --year 2021 --input-dir /path/to/custom/input
+
+# Use custom input directory in pipeline
+python scripts/cerra_pipeline.py --region central_europe --years 2021 --input-dir /path/to/custom/input
 ```
 
 ## Adding New Variables
@@ -177,7 +217,7 @@ python scripts/preprocess_cerra.py --region central_europe --year 2021 --input-d
 To add new variables to the pipeline:
 
 1. **Update configuration**: Add variables to `VARIABLE_GROUPS` in `config.py`
-2. **Update preprocessing**: Modify `CERRAProcessor` class in `preprocess_cerra.py` to handle new variables
+2. **Update preprocessing**: Modify `CERRAProcessorHDF5` class in `preprocess_cerra.py` to handle new variables
 3. **Update target variables**: Add to `PROCESSING_CONFIG["target_variables"]` in `config.py`
 
 Example:
@@ -199,6 +239,14 @@ PROCESSING_CONFIG = {
     # ...
 }
 ```
+
+### Workflow for Adding Variables
+
+The pipeline is designed to handle variable additions efficiently:
+
+1. **Download all variables once**: Use `--variables all_variables` to download all available data
+2. **Process subsets**: Use `--variables base_variables` or `--variables all_variables` during preprocessing
+3. **No re-download needed**: Once downloaded, you can process different variable subsets from the same source files
 
 ## Adding New Regions
 
@@ -243,6 +291,35 @@ The scripts provide detailed output during execution. Check the console output f
 1. **Parallel processing**: Process multiple years in separate terminal sessions
 2. **Storage**: Ensure sufficient disk space (CERRA files are large)
 3. **Memory**: Use systems with adequate RAM for large datasets
+4. **HDF5 efficiency**: HDF5 format provides faster loading and better memory efficiency than individual .npy files
+5. **Background processing**: Use `nohup` for long-running downloads to prevent interruption
+
+## File Naming and Organization
+
+### Download Files
+
+- **Lambert projection files**: `{year}.grib` (e.g., `2013.grib`)
+- **Log files**: `{year}.log` (e.g., `2013.log`)
+- **Location**: `lambert_proj/` directory
+
+### Processed Files
+
+- **HDF5 data files**: `{region}_cerra_data.h5`
+- **HDF5 static files**: `{region}_cerra_static.h5`
+- **Location**: `data/{region}/CERRA/samples/` directory
+
+### Workflow Example
+
+```bash
+# 1. Download all variables for 2013
+nohup python scripts/cerra_pipeline.py --years 2013 --skip-projection --skip-preprocessing > lambert_proj/2013.log 2>&1 &
+
+# 2. Process base variables for central Europe
+python scripts/cerra_pipeline.py --region central_europe --years 2013 --variables base_variables --skip-download
+
+# 3. Process all variables for iberia (from same downloaded file)
+python scripts/cerra_pipeline.py --region iberia --years 2013 --variables all_variables --skip-download
+```
 
 ## Data Quality
 
