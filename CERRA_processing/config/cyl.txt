@@ -1,0 +1,9 @@
+# ---------- cyl.txt ----------
+gridtype = lonlat
+xsize    = 368          # even – points, not intervals
+ysize    = 368          # even
+xfirst   = -2           # western edge  (°E)
+xinc     = 0.0544959128 # 20° / (368-1)  – high-precision
+yfirst   = 40           # southern edge (°N)
+yinc     = 0.0544959128
+# --------------------------------

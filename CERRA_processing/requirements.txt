@@ -1,0 +1,17 @@
+# CERRA Data Processing Pipeline Requirements
+# Install with: pip install -r requirements.txt
+
+# Core data processing
+xarray>=0.20.0
+numpy>=1.20.0
+cfgrib>=0.9.10
+
+# CDS API for downloading
+cdsapi>=0.5.0
+
+# Optional but recommended
+matplotlib>=3.3.0  # For visualization (used in some scripts)
+pathlib2>=2.3.0    # For older Python versions
+
+
+

@@ -1,0 +1,9 @@
+# ---------- cyl_turkey.txt ----------
+gridtype = lonlat
+xsize    = 368           # 368 points  → 20°
+ysize    = 368
+xfirst   = 24            # 24° E  …  ≈ 44° E
+xinc     = 0.0544959128
+yfirst   = 50            # 30° N …  ≈ 50° N
+yinc     = 0.0544959128
+# ------------------------------------
