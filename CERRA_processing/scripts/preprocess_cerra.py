@@ -181,6 +181,7 @@ class CERRAProcessorHDF5:
         
         # Compute friction velocity
         friction_velocity = np.sqrt(np.sqrt(tau_u**2 + tau_v**2) / rho)
+        friction_velocity = friction_velocity / 3600
         
         return friction_velocity.values
     
