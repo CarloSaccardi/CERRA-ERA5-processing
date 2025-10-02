@@ -87,6 +87,15 @@ python scripts/cerra_pipeline.py --years 2013 --skip-projection --skip-preproces
 nohup python scripts/cerra_pipeline.py --years 2013 --skip-projection --skip-preprocessing > lambert_proj/2013.log 2>&1 &
 ```
 
+### Download Static Variables
+
+For step 1 (download), static variables like orography and geopotential need to be downloaded separately using their specific scripts:
+
+```bash
+# Download orography (run once, no region required)
+nohup python CERRA_processing/download_scipts/orography.py > CERRA_processing/lambert_proj/orography.log 2>&1 &
+```
+
 ### Individual Steps
 
 You can also run individual steps:

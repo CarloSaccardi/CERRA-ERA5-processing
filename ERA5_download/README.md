@@ -118,6 +118,21 @@ python scripts/era5_pipeline.py --region central_europe --years 2021 --skip-prep
 python scripts/era5_pipeline.py --region central_europe --years 2021 --skip-download
 ```
 
+### Download Static Variables
+
+For step 1 (download), static variables like geopotential need to be downloaded separately using their specific scripts for each region:
+
+```bash
+# Download geopotential for Central Europe
+nohup python ERA5_download/CentralEurope/download_scripts/geopotential.py > ERA5_download/CentralEurope/geopotential_CE.log 2>&1 &
+
+# Download geopotential for Iberia
+nohup python ERA5_download/Iberia/download_scripts/geopotential.py > ERA5_download/Iberia/geopotential_iberia.log 2>&1 &
+
+# Download geopotential for Scandinavia
+nohup python ERA5_download/Scandinavia/download_scripts/geopotential.py > ERA5_download/Scandinavia/geopotential_scandinavia.log 2>&1 &
+```
+
 ### Utility Commands
 ```bash
 # Check prerequisites
