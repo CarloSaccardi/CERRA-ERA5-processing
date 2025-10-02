@@ -8,7 +8,7 @@ cylindrical (lat-lon) projection for specific regions using CDO.
 Usage:
     python project_cerra.py --region central_europe --years 2014 2015
     python project_cerra.py --region iberia --years 2020
-    python project_cerra.py --region scandinavia --input-file single_2021.grib
+    python project_cerra.py --region scandinavia --input-file 2021.grib
 """
 
 import argparse
@@ -55,7 +55,7 @@ def get_input_files(input_dir: Path, years: Optional[List[str]] = None,
     if years:
         files = []
         for year in years:
-            pattern = f"single_{year}.grib"
+            pattern = f"{year}.grib"
             file_path = input_dir / pattern
             if file_path.exists():
                 files.append(file_path)
@@ -63,8 +63,8 @@ def get_input_files(input_dir: Path, years: Optional[List[str]] = None,
                 print(f"Warning: File not found for year {year}: {file_path}")
         return files
     else:
-        # Find all single_*.grib files
-        return list(input_dir.glob("single_*.grib"))
+        # Find all *.grib files
+        return list(input_dir.glob("*.grib"))
 
 
 def run_cdo_remap(input_file: Path, output_file: Path, coord_file: Path) -> None:
@@ -75,10 +75,12 @@ def run_cdo_remap(input_file: Path, output_file: Path, coord_file: Path) -> None
         output_file: Output GRIB file
         coord_file: Coordinate file for target grid
     """
+    
+    remap_argument = f'{CDO_CONFIG["interpolation_method"]},{str(coord_file)}'
+    
     cmd = [
         "cdo", 
-        CDO_CONFIG["interpolation_method"],
-        str(coord_file),
+        remap_argument,
         str(input_file),
         str(output_file)
     ]
@@ -174,7 +176,7 @@ Examples:
   python project_cerra.py --region iberia --years 2020
   
   # Project a specific file for Scandinavia
-  python project_cerra.py --region scandinavia --input-file single_2021.grib
+  python project_cerra.py --region scandinavia --input-file 2021.grib
   
   # Project all available files for central Europe
   python project_cerra.py --region central_europe
