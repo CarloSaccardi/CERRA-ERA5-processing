@@ -60,12 +60,12 @@ REGIONS = {
     },
     "iberia": {
         "name": "Iberia", 
-        "area": [45, -10, 35, 5],  # [North, West, South, East]
+        "area": [45, -15, 25, 5],  # [North, West, South, East]
         "description": "Iberian Peninsula region"
     },
     "scandinavia": {
         "name": "Scandinavia",
-        "area": [72, 5, 55, 30],  # [North, West, South, East]
+        "area": [70, 24, 50, 44],  # [North, West, South, East]
         "description": "Scandinavia region"
     }
 }
