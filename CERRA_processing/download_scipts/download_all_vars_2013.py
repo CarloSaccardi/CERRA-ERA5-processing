@@ -9,7 +9,8 @@ request = {
         "momentum_flux_at_the_surface_u_component",
         "momentum_flux_at_the_surface_v_component",
         "surface_pressure",
-        "surface_sensible_heat_flux"
+        "surface_sensible_heat_flux",
+        "2m__relative_humidity"
     ],
     "level_type": "surface_or_atmosphere",
     "data_type": ["reanalysis"],
