@@ -14,4 +14,4 @@ request = {
 }
 
 client = cdsapi.Client()
-client.retrieve(dataset, request).download()
+client.retrieve(dataset, request).download("/aspire/CarloData/CERRA-ERA5-processing/CERRA_processing/lambert_proj/single_levels/orography.grib")

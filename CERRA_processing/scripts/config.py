@@ -51,7 +51,8 @@ VARIABLE_GROUPS = {
         "momentum_flux_at_the_surface_u_component",
         "momentum_flux_at_the_surface_v_component",
         "surface_sensible_heat_flux",
-        "surface_pressure"
+        "surface_pressure",
+        "relative_humidity",
     ]
 }
 

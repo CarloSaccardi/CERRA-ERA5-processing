@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 import time
+import os
 
 # Add the current directory to the path to import config
 sys.path.append(str(Path(__file__).parent))
@@ -125,15 +126,15 @@ def project_cerra_data(region: str, years: Optional[List[str]] = None,
     
     # Set input directory
     if input_dir is None:
-        input_dir = paths["lambert_proj"] / "single_levels"
+        input_dir = os.path.join(str(paths["lambert_proj"]), "single_levels")
     
     # Get coordinate file
-    coord_file = paths["coordinate_files"] / coord_file_name
+    coord_file = os.path.join(str(paths["coordinate_files"]), coord_file_name)
     if not coord_file.exists():
         raise FileNotFoundError(f"Coordinate file not found: {coord_file}")
     
     # Create output directory
-    output_dir = paths["latlon_proj"] / "single_levels"
+    output_dir = os.path.join(str(paths["latlon_proj"]), "single_levels")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Get input files
@@ -151,7 +152,7 @@ def project_cerra_data(region: str, years: Optional[List[str]] = None,
     for input_file_path in input_files:
         # Generate output filename
         output_filename = input_file_path.name
-        output_file_path = output_dir / output_filename
+        output_file_path = os.path.join(output_dir, output_filename)
         
         # Skip if output file already exists
         if output_file_path.exists():
@@ -160,6 +161,33 @@ def project_cerra_data(region: str, years: Optional[List[str]] = None,
         
         print(f"\nProcessing: {input_file_path.name}")
         run_cdo_remap(input_file_path, output_file_path, coord_file)
+        
+        
+def project_static_variables(region: str) -> None:
+    """
+    Projects the static orography variable to the specified region's grid.
+    """
+    if not check_cdo_available():
+        raise RuntimeError("CDO (Climate Data Operators) is not available. Please install CDO.")
+    
+    # Get region configuration
+    region_config = get_region_config(region)
+    paths = get_output_paths(region)
+
+    input_file_path = os.path.join(str(paths["lambert_proj"]), "single_levels", "orography.grib")
+    output_file_path = os.path.join(str(paths["latlon_proj"]), "single_levels", "orography.grib")
+
+    # Get the coordinate file path correctly and robustly
+    coord_file_name = region_config["coord_file"]
+    coord_file_path = os.path.join(str(paths["coordinate_files"]), coord_file_name)
+
+    # Call CDO wrapper function
+    print(f"Projecting orography to {region}...")
+    try:
+        # Note: Your run_cdo_remap function already handles converting paths to strings
+        run_cdo_remap(input_file_path, output_file_path, coord_file_path)
+    except Exception as e:
+        print(f"An error occurred during the projection of static variables: {e}")
 
 
 def main():
@@ -210,6 +238,20 @@ Examples:
         help="Input directory (default: lambert_proj/single_levels)"
     )
     
+    parser.add_argument(
+        '--static-only', 
+        type=bool,
+        default=False, 
+        help='Process only static variables (orography)'
+    )
+    
+    parser.add_argument(
+        '--time-varying-only', 
+        type=bool,
+        default=False, 
+        help='Process only time-varying variables'
+    )
+    
     args = parser.parse_args()
     
     # Set input directory
@@ -217,13 +259,26 @@ Examples:
     if args.input_dir:
         input_dir = Path(args.input_dir)
     
-    # Project data
-    project_cerra_data(
-        region=args.region,
-        years=args.years,
-        input_file=args.input_file,
-        input_dir=input_dir
-    )
+    if args.static_only:
+        print("Processing only static variables (orography)...")
+        project_static_variables(
+            region=args.region
+            )
+        
+        
+    if args.time_varying_only:
+        # Project time-dependent data
+        print("Processing only time-varying variables...")
+        project_cerra_data(
+            region=args.region,
+            years=args.years,
+            input_file=args.input_file,
+            input_dir=input_dir
+        )
+        
+    if not args.static_only and not args.time_varying_only:
+        raise ValueError("Please specify either --static-only or --time-varying-only.")
+    
 
 
 if __name__ == "__main__":
