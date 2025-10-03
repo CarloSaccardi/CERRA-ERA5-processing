@@ -100,6 +100,10 @@ nohup python CERRA_processing/download_scipts/orography.py > CERRA_processing/la
 
 You can also run individual steps:
 
+#### Projection Options
+
+The projection step (Step 2) offers flexible options for projecting different types of variables:
+
 ```bash
 # Step 1: Download data (downloads all variables by default)
 python scripts/download_cerra.py --years 2021 --variables all_variables
@@ -107,9 +111,24 @@ python scripts/download_cerra.py --years 2021 --variables all_variables
 # Step 2: Project to cylindrical coordinates
 python scripts/project_cerra.py --region central_europe --years 2021
 
+# Step 2a: Project only time-varying variables
+python scripts/project_cerra.py --region central_europe --years 2021 --time-varying-only
+
+# Step 2b: Project only static variables (orography)
+python scripts/project_cerra.py --region central_europe --static-only
+
+# Step 2c: Project both time-varying and static variables (single command)
+python scripts/project_cerra.py --region central_europe --years 2021 --time-varying-only --static-only
+
 # Step 3: Preprocess data (choose variable subset)
 python scripts/preprocess_cerra.py --region central_europe --year 2021 --variables base_variables
 ```
+
+**Projection Options Explained:**
+- `--time-varying-only`: Projects only meteorological variables (u10, v10, t2m, etc.) - requires `--years` parameter
+- `--static-only`: Projects only static variables (orography) - no `--years` parameter needed
+- **Both flags together**: You can use both `--time-varying-only` and `--static-only` in the same command to project both types of variables
+- **Note**: You must specify at least one of `--static-only` or `--time-varying-only`
 
 ## Configuration
 
