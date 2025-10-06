@@ -3,5 +3,5 @@
 *.grib
 *.idx
 *.json
-#all files ins folder /aspire/CarloData/CERRA-ERA5-processing/CERRA_processing/download_scipts/*
+*.pyc
 CERRA_processing/download_scipts/*

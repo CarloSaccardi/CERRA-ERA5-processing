@@ -82,9 +82,9 @@ class ERA5Downloader:
         # Set output filename
         if output_filename is None:
             if DOWNLOAD_CONFIG["data_format"] == "netcdf":
-                output_filename = f"single_{year}.nc"
+                output_filename = f"{year}.nc"
             else:
-                output_filename = f"single_{year}.grib"
+                output_filename = f"{year}.grib"
         
         output_path = self.paths["raw_data"] / output_filename
         
