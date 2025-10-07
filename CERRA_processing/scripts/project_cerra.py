@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 import time
-import os
+import tempfile
 
 # Add the current directory to the path to import config
 sys.path.append(str(Path(__file__).parent))
@@ -126,19 +126,23 @@ def project_cerra_data(region: str, years: Optional[List[str]] = None,
     
     # Set input directory
     if input_dir is None:
-        input_dir = os.path.join(str(paths["lambert_proj"]), "single_levels")
+        input_dir = paths["lambert_proj"] / "single_levels"
+        input_dir_humidity = paths["lambert_proj"] / "single_levels_humidity"
     
     # Get coordinate file
-    coord_file = os.path.join(str(paths["coordinate_files"]), coord_file_name)
+    coord_file = paths["coordinate_files"] / coord_file_name
     if not coord_file.exists():
         raise FileNotFoundError(f"Coordinate file not found: {coord_file}")
     
     # Create output directory
-    output_dir = os.path.join(str(paths["latlon_proj"]), "single_levels")
+    output_dir = paths["latlon_proj"] / "single_levels"
+    output_dir_humidity = paths["latlon_proj"] / "single_levels_humidity"
     output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir_humidity.mkdir(parents=True, exist_ok=True)
     
     # Get input files
     input_files = get_input_files(input_dir, years, input_file)
+    input_files_humidity = get_input_files(input_dir_humidity, years, input_file)
     
     if not input_files:
         print("No input files found to process.")
@@ -152,7 +156,7 @@ def project_cerra_data(region: str, years: Optional[List[str]] = None,
     for input_file_path in input_files:
         # Generate output filename
         output_filename = input_file_path.name
-        output_file_path = os.path.join(output_dir, output_filename)
+        output_file_path = output_dir / output_filename
         
         # Skip if output file already exists
         if output_file_path.exists():
@@ -160,6 +164,20 @@ def project_cerra_data(region: str, years: Optional[List[str]] = None,
             continue
         
         print(f"\nProcessing: {input_file_path.name}")
+        run_cdo_remap(input_file_path, output_file_path, coord_file)
+        
+    # Process humidity files if they exist
+    for input_file_path in input_files_humidity:
+        # Generate output filename
+        output_filename = input_file_path.name
+        output_file_path = output_dir_humidity / output_filename
+        
+        # Skip if output file already exists
+        if output_file_path.exists():
+            print(f"Skipping {input_file_path.name} (output already exists)")
+            continue
+        
+        print(f"\nProcessing humidity file: {input_file_path.name}")
         run_cdo_remap(input_file_path, output_file_path, coord_file)
         
         
@@ -174,12 +192,12 @@ def project_static_variables(region: str) -> None:
     region_config = get_region_config(region)
     paths = get_output_paths(region)
 
-    input_file_path = os.path.join(str(paths["lambert_proj"]), "single_levels", "orography.grib")
-    output_file_path = os.path.join(str(paths["latlon_proj"]), "single_levels", "orography.grib")
+    input_file_path = paths["lambert_proj"] / "single_levels" / "orography.grib"
+    output_file_path = paths["latlon_proj"] / "single_levels" / "orography.grib"
 
     # Get the coordinate file path correctly and robustly
     coord_file_name = region_config["coord_file"]
-    coord_file_path = os.path.join(str(paths["coordinate_files"]), coord_file_name)
+    coord_file_path = paths["coordinate_files"] / coord_file_name
 
     # Call CDO wrapper function
     print(f"Projecting orography to {region}...")
