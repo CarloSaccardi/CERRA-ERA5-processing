@@ -6,9 +6,17 @@ This script converts CERRA data from Lambert conformal projection to
 cylindrical (lat-lon) projection for specific regions using CDO.
 
 Usage:
-    python project_cerra.py --region central_europe --years 2014 2015
-    python project_cerra.py --region iberia --years 2020
-    python project_cerra.py --region scandinavia --input-file 2021.grib
+    # Project time-varying data
+    python project_cerra.py --region central_europe --years 2014 2015 \\
+        --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
+    
+    # Project static variables
+    python project_cerra.py --region central_europe \\
+        --remap_directories lambert_proj/single_levels_static
+    
+    # Project everything
+    python project_cerra.py --region central_europe --years 2014 2015 \\
+        --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
 """
 
 import argparse
@@ -102,16 +110,42 @@ def run_cdo_remap(input_file: Path, output_file: Path, coord_file: Path) -> None
         raise
 
 
-def project_cerra_data(region: str, years: Optional[List[str]] = None, 
-                      input_file: Optional[str] = None, 
-                      input_dir: Optional[Path] = None) -> None:
+def determine_output_dir(input_dir: Path, region_name: str, base_path: Path) -> Path:
+    """Determine output directory based on input directory structure.
+    
+    Args:
+        input_dir: Input directory path
+        region_name: Name of the region (e.g., 'CentralEurope')
+        base_path: Base path for lambert_proj
+        
+    Returns:
+        Corresponding output directory path
+    """
+    # Get relative path from lambert_proj parent
+    try:
+        relative_path = input_dir.relative_to(base_path.parent)
+    except ValueError:
+        # If absolute path doesn't contain lambert_proj parent, use input_dir as is
+        relative_path = input_dir
+    
+    # Replace lambert_proj with latlon_proj_{region}
+    output_path_str = str(relative_path).replace("lambert_proj", f"latlon_proj_{region_name}")
+    output_dir = base_path.parent / output_path_str
+    
+    return output_dir
+
+
+def project_cerra_data(region: str, 
+                      remap_directories: List[Path],
+                      years: Optional[List[str]] = None, 
+                      input_file: Optional[str] = None) -> None:
     """Project CERRA data from Lambert to cylindrical projection.
     
     Args:
         region: Target region name
+        remap_directories: List of input directories to process
         years: List of years to process (optional)
         input_file: Specific file to process (optional)
-        input_dir: Input directory (optional, defaults to lambert_proj/single_levels)
     """
     # Check if CDO is available
     if not check_cdo_available():
@@ -120,92 +154,58 @@ def project_cerra_data(region: str, years: Optional[List[str]] = None,
     # Get region configuration
     region_config = get_region_config(region)
     coord_file_name = region_config["coord_file"]
+    region_name = region_config["name"]
     
     # Get paths
     paths = get_output_paths(region)
-    
-    # Set input directory
-    if input_dir is None:
-        input_dir = paths["lambert_proj"] / "single_levels"
-        input_dir_humidity = paths["lambert_proj"] / "single_levels_humidity"
     
     # Get coordinate file
     coord_file = paths["coordinate_files"] / coord_file_name
     if not coord_file.exists():
         raise FileNotFoundError(f"Coordinate file not found: {coord_file}")
     
-    # Create output directory
-    output_dir = paths["latlon_proj"] / "single_levels"
-    output_dir_humidity = paths["latlon_proj"] / "single_levels_humidity"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_dir_humidity.mkdir(parents=True, exist_ok=True)
-    
-    # Get input files
-    input_files = get_input_files(input_dir, years, input_file)
-    input_files_humidity = get_input_files(input_dir_humidity, years, input_file)
-    
-    if not input_files:
-        print("No input files found to process.")
-        return
-    
-    print(f"Processing {len(input_files)} files for region: {region}")
+    print(f"Region: {region}")
     print(f"Coordinate file: {coord_file}")
-    print(f"Output directory: {output_dir}")
+    print(f"Processing {len(remap_directories)} directories")
     
-    # Process each file
-    for input_file_path in input_files:
-        # Generate output filename
-        output_filename = input_file_path.name
-        output_file_path = output_dir / output_filename
+    # Process each input directory
+    for input_dir in remap_directories:
+        print(f"\n{'='*60}")
+        print(f"Processing directory: {input_dir}")
+        print(f"{'='*60}")
         
-        # Skip if output file already exists
-        if output_file_path.exists():
-            print(f"Skipping {input_file_path.name} (output already exists)")
+        # Check if directory exists
+        if not input_dir.exists():
+            print(f"Warning: Directory not found: {input_dir}")
             continue
         
-        print(f"\nProcessing: {input_file_path.name}")
-        run_cdo_remap(input_file_path, output_file_path, coord_file)
+        # Determine output directory
+        output_dir = determine_output_dir(input_dir, region_name, paths["lambert_proj"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Output directory: {output_dir}")
         
-    # Process humidity files if they exist
-    for input_file_path in input_files_humidity:
-        # Generate output filename
-        output_filename = input_file_path.name
-        output_file_path = output_dir_humidity / output_filename
+        # Get input files
+        input_files = get_input_files(input_dir, years, input_file)
         
-        # Skip if output file already exists
-        if output_file_path.exists():
-            print(f"Skipping {input_file_path.name} (output already exists)")
+        if not input_files:
+            print(f"No input files found in {input_dir}")
             continue
         
-        print(f"\nProcessing humidity file: {input_file_path.name}")
-        run_cdo_remap(input_file_path, output_file_path, coord_file)
+        print(f"Found {len(input_files)} file(s) to process")
         
+        # Process each file
+        for input_file_path in input_files:
+            output_filename = input_file_path.name
+            output_file_path = output_dir / output_filename
+            
+            # Skip if output file already exists
+            if output_file_path.exists():
+                print(f"  Skipping {input_file_path.name} (output already exists)")
+                continue
+            
+            print(f"\n  Processing: {input_file_path.name}")
+            run_cdo_remap(input_file_path, output_file_path, coord_file)
         
-def project_static_variables(region: str) -> None:
-    """
-    Projects the static orography variable to the specified region's grid.
-    """
-    if not check_cdo_available():
-        raise RuntimeError("CDO (Climate Data Operators) is not available. Please install CDO.")
-    
-    # Get region configuration
-    region_config = get_region_config(region)
-    paths = get_output_paths(region)
-
-    input_file_path = paths["lambert_proj"] / "single_levels" / "orography.grib"
-    output_file_path = paths["latlon_proj"] / "single_levels" / "orography.grib"
-
-    # Get the coordinate file path correctly and robustly
-    coord_file_name = region_config["coord_file"]
-    coord_file_path = paths["coordinate_files"] / coord_file_name
-
-    # Call CDO wrapper function
-    print(f"Projecting orography to {region}...")
-    try:
-        # Note: Your run_cdo_remap function already handles converting paths to strings
-        run_cdo_remap(input_file_path, output_file_path, coord_file_path)
-    except Exception as e:
-        print(f"An error occurred during the projection of static variables: {e}")
 
 
 def main():
@@ -215,17 +215,21 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Project data for central Europe for specific years
-  python project_cerra.py --region central_europe --years 2014 2015
+  # Project time-varying data for specific years
+  python project_cerra.py --region central_europe --years 2014 2015 \\
+    --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
   
-  # Project data for Iberia for a single year
-  python project_cerra.py --region iberia --years 2020
+  # Project static variables only
+  python project_cerra.py --region central_europe \\
+    --remap_directories lambert_proj/single_levels_static
   
-  # Project a specific file for Scandinavia
-  python project_cerra.py --region scandinavia --input-file 2021.grib
+  # Project everything for specific years
+  python project_cerra.py --region central_europe --years 2014 2015 \\
+    --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
   
-  # Project all available files for central Europe
-  python project_cerra.py --region central_europe
+  # Project a specific file
+  python project_cerra.py --region scandinavia --input-file 2021.grib \\
+    --remap_directories lambert_proj/single_levels
         """
     )
     
@@ -235,6 +239,14 @@ Examples:
         required=True,
         choices=["central_europe", "iberia", "scandinavia"],
         help="Target region for projection"
+    )
+    
+    parser.add_argument(
+        "--remap_directories",
+        nargs="+",
+        type=str,
+        required=True,
+        help="List of input directories to remap (e.g., lambert_proj/single_levels)"
     )
     
     group = parser.add_mutually_exclusive_group()
@@ -250,52 +262,18 @@ Examples:
         help="Specific input file to process"
     )
     
-    parser.add_argument(
-        "--input-dir",
-        type=str,
-        help="Input directory (default: lambert_proj/single_levels)"
-    )
-    
-    parser.add_argument(
-        '--static-only', 
-        type=bool,
-        default=False, 
-        help='Process only static variables (orography)'
-    )
-    
-    parser.add_argument(
-        '--time-varying-only', 
-        type=bool,
-        default=False, 
-        help='Process only time-varying variables'
-    )
-    
     args = parser.parse_args()
     
-    # Set input directory
-    input_dir = None
-    if args.input_dir:
-        input_dir = Path(args.input_dir)
+    # Convert string paths to Path objects
+    remap_dirs = [Path(d) for d in args.remap_directories]
     
-    if args.static_only:
-        print("Processing only static variables (orography)...")
-        project_static_variables(
-            region=args.region
-            )
-        
-        
-    if args.time_varying_only:
-        # Project time-dependent data
-        print("Processing only time-varying variables...")
-        project_cerra_data(
-            region=args.region,
-            years=args.years,
-            input_file=args.input_file,
-            input_dir=input_dir
-        )
-        
-    if not args.static_only and not args.time_varying_only:
-        raise ValueError("Please specify either --static-only or --time-varying-only.")
+    # Execute projection
+    project_cerra_data(
+        region=args.region,
+        remap_directories=remap_dirs,
+        years=args.years,
+        input_file=args.input_file
+    )
     
 
 

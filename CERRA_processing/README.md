@@ -13,25 +13,28 @@ The pipeline processes CERRA data through three main steps:
 ## Directory Structure
 
 ```
-CERRA_download/
-├── scripts/                  # Python scripts
-│   ├── config.py            # Configuration file with all settings
-│   ├── download_cerra.py    # Download script
-│   ├── project_cerra.py     # Projection conversion script
-│   ├── preprocess_cerra.py  # Data preprocessing script
-│   ├── cerra_pipeline.py    # Main pipeline orchestrator
-│   └── example_usage.py     # Usage examples
-├── config/                   # Configuration files
-│   ├── cyl.txt              # Central Europe coordinate file
-│   ├── cyl_iberia.txt       # Iberia coordinate file
-│   └── cyl_scandinavia.txt  # Scandinavia coordinate file
-├── lambert_proj/             # Downloaded data (Lambert projection)
-│   └── single_levels/
-├── latlon_proj_*/            # Projected data (cylindrical projection)
-│   └── single_levels/
-├── download_scipts/          # Legacy scripts (can be removed)
-├── README.md                 # This documentation
-└── requirements.txt          # Python dependencies
+CERRA_processing/
+├── scripts/                       # Python scripts
+│   ├── config.py                 # Configuration file with all settings
+│   ├── download_cerra.py         # Download script
+│   ├── project_cerra.py          # Projection conversion script
+│   ├── preprocess_cerra.py       # Data preprocessing script
+│   └── example_usage.py          # Usage examples
+├── config/                        # Configuration files
+│   ├── cyl.txt                   # Central Europe coordinate file
+│   ├── cyl_iberia.txt            # Iberia coordinate file
+│   └── cyl_scandinavia.txt       # Scandinavia coordinate file
+├── lambert_proj/                  # Downloaded data (Lambert projection)
+│   ├── single_levels/            # Time-varying variables (2013.grib, 2014.grib, etc.)
+│   ├── single_levels_humidity/   # Humidity data (r2 variable)
+│   └── single_levels_static/     # Static variables (orography.grib, etc.)
+├── latlon_proj_*/                 # Projected data (cylindrical projection)
+│   ├── single_levels/            # Projected time-varying variables
+│   ├── single_levels_humidity/   # Projected humidity data
+│   └── single_levels_static/     # Projected static variables
+├── download_scipts/               # Download helper scripts
+├── README.md                      # This documentation
+└── requirements.txt               # Python dependencies
 ```
 
 ## Prerequisites
@@ -60,75 +63,92 @@ CERRA_download/
 
 ## Quick Start
 
-### Full Pipeline (Recommended)
+The pipeline is organized as a multi-step workflow:
 
-Run the complete pipeline for a region and year(s):
+### Step 1: Download Data
 
-```bash
-# Process central Europe for 2021
-python scripts/cerra_pipeline.py --region central_europe --years 2021 --variables base_variables
-
-# Process multiple years
-python scripts/cerra_pipeline.py --region iberia --years 2014-2021 --variables base_variables
-
-# Process specific years
-python scripts/cerra_pipeline.py --region scandinavia --years 2014,2015,2016 --variables base_variables
-```
-
-### Download Only (No Region Required)
-
-Download data without processing (useful for downloading all variables once):
+Download CERRA data from CDS in Lambert projection:
 
 ```bash
-# Download all variables for 2013
-python scripts/cerra_pipeline.py --years 2013 --skip-projection --skip-preprocessing
+# Download all variables for specific years
+python scripts/download_cerra.py --years 2021 --variables all_variables
 
 # Download with nohup for background processing
-nohup python scripts/cerra_pipeline.py --years 2013 --skip-projection --skip-preprocessing > lambert_proj/2013.log 2>&1 &
+nohup python scripts/download_cerra.py --years 2013 --variables all_variables > lambert_proj/2013.log 2>&1 &
 ```
 
 ### Download Static Variables
 
-For step 1 (download), static variables like orography and geopotential need to be downloaded separately using their specific scripts:
+Static variables like orography need to be downloaded separately:
 
 ```bash
-# Download orography (run once, no region required)
-nohup python CERRA_processing/download_scipts/orography.py > CERRA_processing/lambert_proj/orography.log 2>&1 &
+# Download orography (run once)
+nohup python download_scipts/orography.py > lambert_proj/orography.log 2>&1 &
 ```
 
-### Individual Steps
+After downloading, move orography to the static variables folder:
+```bash
+mkdir -p lambert_proj/single_levels_static
+mv lambert_proj/single_levels/orography.grib lambert_proj/single_levels_static/
+```
 
-You can also run individual steps:
+### Download and Separate Humidity Data
 
-#### Projection Options
-
-The projection step (Step 2) offers flexible options for projecting different types of variables:
+If you have humidity data, separate it by year:
 
 ```bash
-# Step 1: Download data (downloads all variables by default)
-python scripts/download_cerra.py --years 2021 --variables all_variables
+# Create humidity directory
+mkdir -p lambert_proj/single_levels_humidity
 
-# Step 2: Project to cylindrical coordinates
-python scripts/project_cerra.py --region central_europe --years 2021
+# Split multi-year humidity files into individual years
+for year in 2013 2014 2015; do
+    grib_copy -w year=$year download_scipts/humidity_2013_15.grib lambert_proj/single_levels_humidity/${year}.grib
+done
+```
 
-# Step 2a: Project only time-varying variables
-python scripts/project_cerra.py --region central_europe --years 2021 --time-varying-only
+### Step 2: Project to Lat-Lon Grid
 
-# Step 2b: Project only static variables (orography)
-python scripts/project_cerra.py --region central_europe --static-only
+Convert from Lambert projection to cylindrical (lat-lon) projection using the `--remap_directories` argument:
 
-# Step 2c: Project both time-varying and static variables (single command)
-python scripts/project_cerra.py --region central_europe --years 2021 --time-varying-only --static-only
+```bash
+# Project time-varying variables for specific years
+python scripts/project_cerra.py \
+  --region central_europe \
+  --years 2013 2014 2015 \
+  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
 
-# Step 3: Preprocess data (choose variable subset)
+# Project static variables only (no --years needed)
+python scripts/project_cerra.py \
+  --region central_europe \
+  --remap_directories lambert_proj/single_levels_static
+
+# Project everything at once
+python scripts/project_cerra.py \
+  --region central_europe \
+  --years 2013 2014 2015 \
+  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
+
+# Project a specific file
+python scripts/project_cerra.py \
+  --region scandinavia \
+  --input-file 2021.grib \
+  --remap_directories lambert_proj/single_levels
+```
+
+**Key Points:**
+- `--remap_directories`: List of directories to process (required)
+- `--years`: Process specific years (optional; if omitted, processes all .grib files)
+- `--input-file`: Process a specific file by name (optional)
+- Output directories are automatically created by replacing `lambert_proj` with `latlon_proj_{region}`
+
+### Step 3: Preprocess Data
+
+Extract and compute meteorological variables, save as HDF5 files:
+
+```bash
+# Preprocess for a specific year
 python scripts/preprocess_cerra.py --region central_europe --year 2021 --variables base_variables
 ```
-
-**Projection Options Explained:**
-- `--time-varying-only`: Projects only meteorological variables (u10, v10, t2m, etc.) - requires `--years` parameter
-- `--static-only`: Projects only static variables (orography) - no `--years` parameter needed
-- **Both flags together**: You can use both `--time-varying-only` and `--static-only` in the same command to project both types of variables
-- **Note**: You must specify at least one of `--static-only` or `--time-varying-only`
 
 ## Configuration
 
@@ -201,43 +221,46 @@ test_loader = data_module.test_dataloader()
 
 ## Advanced Usage
 
-### Skip Steps
+### Processing Multiple Regions
 
-You can skip certain steps if you already have intermediate data:
+You can process the same data for different regions:
 
 ```bash
-# Skip download (use existing Lambert projection data)
-python scripts/cerra_pipeline.py --region central_europe --years 2021 --skip-download
+# Project for central Europe
+python scripts/project_cerra.py \
+  --region central_europe \
+  --years 2013 2014 \
+  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
 
-# Skip projection (use existing cylindrical projection data)
-python scripts/cerra_pipeline.py --region central_europe --years 2021 --skip-projection
-
-# Skip preprocessing (use existing processed data)
-python scripts/cerra_pipeline.py --region central_europe --years 2021 --skip-preprocessing
-
-# Download only (no region required)
-python scripts/cerra_pipeline.py --years 2021 --skip-projection --skip-preprocessing
+# Project for iberia (uses same source files)
+python scripts/project_cerra.py \
+  --region iberia \
+  --years 2013 2014 \
+  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
 ```
 
-### Check Prerequisites
+### Custom Input Directories
 
-Verify that all required software is installed:
+You can specify custom input directories for projection:
 
 ```bash
-python scripts/cerra_pipeline.py --region central_europe --check-prerequisites
+# Use custom directories
+python scripts/project_cerra.py \
+  --region central_europe \
+  --years 2021 \
+  --remap_directories /path/to/custom/dir1 /path/to/custom/dir2
 ```
 
-### Custom Input/Output Directories
+### Batch Processing
+
+Process multiple years efficiently:
 
 ```bash
-# Custom input directory for projection
-python scripts/project_cerra.py --region central_europe --years 2021 --input-dir /path/to/custom/input
-
-# Custom input directory for preprocessing
-python scripts/preprocess_cerra.py --region central_europe --year 2021 --input-dir /path/to/custom/input
-
-# Use custom input directory in pipeline
-python scripts/cerra_pipeline.py --region central_europe --years 2021 --input-dir /path/to/custom/input
+# Process years 2013-2021 in one command
+python scripts/project_cerra.py \
+  --region central_europe \
+  --years 2013 2014 2015 2016 2017 2018 2019 2020 2021 \
+  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
 ```
 
 ## Adding New Variables
@@ -336,17 +359,36 @@ The scripts provide detailed output during execution. Check the console output f
 - **HDF5 static files**: `{region}_cerra_static.h5`
 - **Location**: `data/{region}/CERRA/samples/` directory
 
-### Workflow Example
+### Complete Workflow Example
 
 ```bash
 # 1. Download all variables for 2013
-nohup python scripts/cerra_pipeline.py --years 2013 --skip-projection --skip-preprocessing > lambert_proj/2013.log 2>&1 &
+nohup python scripts/download_cerra.py --years 2013 --variables all_variables > lambert_proj/2013.log 2>&1 &
 
-# 2. Process base variables for central Europe
-python scripts/cerra_pipeline.py --region central_europe --years 2013 --variables base_variables --skip-download
+# 2. Download and organize static variables
+nohup python download_scipts/orography.py > lambert_proj/orography.log 2>&1 &
+mkdir -p lambert_proj/single_levels_static
+mv lambert_proj/single_levels/orography.grib lambert_proj/single_levels_static/
 
-# 3. Process all variables for iberia (from same downloaded file)
-python scripts/cerra_pipeline.py --region iberia --years 2013 --variables all_variables --skip-download
+# 3. Download and separate humidity data (if needed)
+mkdir -p lambert_proj/single_levels_humidity
+grib_copy -w year=2013 download_scipts/humidity_2013_15.grib lambert_proj/single_levels_humidity/2013.grib
+
+# 4. Project for central Europe
+python scripts/project_cerra.py \
+  --region central_europe \
+  --years 2013 \
+  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
+
+# 5. Project for iberia (from same downloaded files)
+python scripts/project_cerra.py \
+  --region iberia \
+  --years 2013 \
+  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
+
+# 6. Preprocess for each region
+python scripts/preprocess_cerra.py --region central_europe --year 2013 --variables base_variables
+python scripts/preprocess_cerra.py --region iberia --year 2013 --variables base_variables
 ```
 
 ## Data Quality
