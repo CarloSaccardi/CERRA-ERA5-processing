@@ -5,18 +5,25 @@ CERRA Data Projection Script
 This script converts CERRA data from Lambert conformal projection to 
 cylindrical (lat-lon) projection for specific regions using CDO.
 
+The script automatically handles:
+- Multiple regions (if --region not specified, projects all regions)
+- Year files (named YYYY.grib, e.g., 2014.grib, 2015.grib)
+- Static files (e.g., orography.grib, any non-year named files)
+
+Output files are saved as compressed NetCDF4 format (.nc) with the same base name.
+
 Usage:
-    # Project time-varying data
-    python project_cerra.py --region central_europe --years 2014 2015 \\
-        --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
+    # Project ALL regions for specific years
+    python project_cerra.py --years 2014 2015 \\
+        --input_directories single_levels single_levels_humidity
     
-    # Project static variables
-    python project_cerra.py --region central_europe \\
-        --remap_directories lambert_proj/single_levels_static
-    
-    # Project everything
+    # Project specific region for specific years
     python project_cerra.py --region central_europe --years 2014 2015 \\
-        --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
+        --input_directories single_levels single_levels_humidity
+    
+    # Project ALL regions, all years + static files
+    python project_cerra.py \\
+        --input_directories single_levels single_levels_static
 """
 
 import argparse
@@ -25,7 +32,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 import time
-import tempfile
+import os 
 
 # Add the current directory to the path to import config
 sys.path.append(str(Path(__file__).parent))
@@ -41,27 +48,35 @@ def check_cdo_available() -> bool:
         return False
 
 
-def get_input_files(input_dir: Path, years: Optional[List[str]] = None, 
-                   input_file: Optional[str] = None) -> List[Path]:
-    """Get list of input files to process.
+def is_year_file(filename: str) -> bool:
+    """Check if a filename represents a year file.
+    
+    Args:
+        filename: Name of the file (e.g., '2021.grib', 'orography.grib')
+        
+    Returns:
+        True if filename is a year (1900-2100), False otherwise
+    """
+    stem = Path(filename).stem
+    try:
+        year = int(stem)
+        return 1900 <= year <= 2100
+    except ValueError:
+        return False
+
+
+def get_year_files(input_dir: Path, years: Optional[List[str]] = None) -> List[Path]:
+    """Get list of year-based files to process.
     
     Args:
         input_dir: Directory containing input files
-        years: List of years to process (optional)
-        input_file: Specific file to process (optional)
+        years: List of years to process (optional, if None finds all year files)
         
     Returns:
-        List of input file paths
+        List of year file paths
     """
-    if input_file:
-        # Process specific file
-        file_path = input_dir / input_file
-        if not file_path.exists():
-            raise FileNotFoundError(f"Input file not found: {file_path}")
-        return [file_path]
-    
-    # Find files based on years
     if years:
+        # Process specific years
         files = []
         for year in years:
             pattern = f"{year}.grib"
@@ -72,8 +87,55 @@ def get_input_files(input_dir: Path, years: Optional[List[str]] = None,
                 print(f"Warning: File not found for year {year}: {file_path}")
         return files
     else:
-        # Find all *.grib files
-        return list(input_dir.glob("*.grib"))
+        # Find all year files (files named like YYYY.grib)
+        all_grib_files = list(input_dir.glob("*.grib"))
+        year_files = [f for f in all_grib_files if is_year_file(f.name)]
+        return sorted(year_files)
+
+
+def get_static_files(input_dir: Path) -> List[Path]:
+    """Get list of static (non-year) files to process.
+    
+    Args:
+        input_dir: Directory containing input files
+        
+    Returns:
+        List of static file paths (e.g., orography.grib)
+    """
+    all_grib_files = list(input_dir.glob("*.grib"))
+    static_files = [f for f in all_grib_files if not is_year_file(f.name)]
+    return sorted(static_files)
+
+
+def get_input_files(input_dir: Path, years: Optional[List[str]] = None, 
+                   input_file: Optional[str] = None, include_static: bool = True) -> List[Path]:
+    """Get list of input files to process.
+    
+    Args:
+        input_dir: Directory containing input files
+        years: List of years to process (optional, if None processes all years)
+        input_file: Specific file to process (optional)
+        include_static: Whether to include static files (default: True)
+        
+    Returns:
+        List of input file paths (year files + static files)
+    """
+    if input_file:
+        # Process specific file
+        file_path = input_dir / input_file
+        if not file_path.exists():
+            raise FileNotFoundError(f"Input file not found: {file_path}")
+        return [file_path]
+    
+    # Get year files
+    year_files = get_year_files(input_dir, years)
+    
+    # Get static files if requested
+    if include_static:
+        static_files = get_static_files(input_dir)
+        return year_files + static_files
+    else:
+        return year_files
 
 
 def run_cdo_remap(input_file: Path, output_file: Path, coord_file: Path) -> None:
@@ -81,7 +143,7 @@ def run_cdo_remap(input_file: Path, output_file: Path, coord_file: Path) -> None
     
     Args:
         input_file: Input GRIB file
-        output_file: Output GRIB file
+        output_file: Output NetCDF4 file (compressed)
         coord_file: Coordinate file for target grid
     """
     
@@ -89,6 +151,8 @@ def run_cdo_remap(input_file: Path, output_file: Path, coord_file: Path) -> None
     
     cmd = [
         "cdo", 
+        "-f", "nc4",  # Force NetCDF4 format (compressed, modern)
+        "-z", "zip_4",  # Compression level 4 (good balance of speed and size)
         remap_argument,
         str(input_file),
         str(output_file)
@@ -129,7 +193,7 @@ def determine_output_dir(input_dir: Path, region_name: str, base_path: Path) -> 
         relative_path = input_dir
     
     # Replace lambert_proj with latlon_proj_{region}
-    output_path_str = str(relative_path).replace("lambert_proj", f"latlon_proj_{region_name}")
+    output_path_str = str(relative_path).replace("lambert_proj", f"latlon_proj_{region_name}/remapped")
     output_dir = base_path.parent / output_path_str
     
     return output_dir
@@ -171,7 +235,7 @@ def project_cerra_data(region: str,
     # Process each input directory
     for input_dir in remap_directories:
         print(f"\n{'='*60}")
-        print(f"Processing directory: {input_dir}")
+        print(f"Remapping directory: {input_dir}")
         print(f"{'='*60}")
         
         # Check if directory exists
@@ -184,18 +248,36 @@ def project_cerra_data(region: str,
         output_dir.mkdir(parents=True, exist_ok=True)
         print(f"Output directory: {output_dir}")
         
-        # Get input files
-        input_files = get_input_files(input_dir, years, input_file)
+        # Get input files (separate year and static files for better reporting)
+        if input_file:
+            # Specific file requested
+            input_files = get_input_files(input_dir, years, input_file)
+            year_files = []
+            static_files = []
+            if input_files and is_year_file(input_files[0].name):
+                year_files = input_files
+            else:
+                static_files = input_files
+        else:
+            # Get year files and static files separately
+            year_files = get_year_files(input_dir, years)
+            static_files = get_static_files(input_dir)
         
-        if not input_files:
+        # Report what was found
+        if year_files:
+            print(f"Found {len(year_files)} year file(s): {[f.name for f in year_files]}")
+        if static_files:
+            print(f"Found {len(static_files)} static file(s): {[f.name for f in static_files]}")
+        
+        all_files = year_files + static_files
+        
+        if not all_files:
             print(f"No input files found in {input_dir}")
             continue
         
-        print(f"Found {len(input_files)} file(s) to process")
-        
         # Process each file
-        for input_file_path in input_files:
-            output_filename = input_file_path.name
+        for input_file_path in all_files:
+            output_filename = input_file_path.stem + ".nc"
             output_file_path = output_dir / output_filename
             
             # Skip if output file already exists
@@ -203,9 +285,86 @@ def project_cerra_data(region: str,
                 print(f"  Skipping {input_file_path.name} (output already exists)")
                 continue
             
-            print(f"\n  Processing: {input_file_path.name}")
+            file_type = "year" if is_year_file(input_file_path.name) else "static"
+            print(f"\n  Processing {file_type} file: {input_file_path.name}")
             run_cdo_remap(input_file_path, output_file_path, coord_file)
         
+
+def get_input_directories_for_region(region: str, dir_suffixes: List[str]) -> List[str]:
+    """Construct full directory paths for a region based on suffixes.
+    
+    Args:
+        region: Region name (e.g., 'central_europe')
+        dir_suffixes: Directory suffixes (e.g., ['single_levels', 'single_levels_humidity'])
+        
+    Returns:
+        List of full directory paths that exist
+    """
+    paths = get_output_paths(region)
+    base_dir = paths["lambert_proj"]
+    
+    full_dirs = []
+    
+    for suffix in dir_suffixes:
+        suffix_path = Path(suffix)
+        if suffix_path.is_absolute():
+            full_path = suffix_path
+        else:
+            full_path = base_dir / suffix_path
+        
+        if full_path.exists():
+            full_dirs.append(full_path)
+        else:
+            print(f"  Note: Directory not found (skipping): {full_path}")
+    
+    return full_dirs
+
+
+def project_all_regions(dir_suffixes: List[str] = None,
+                       years: Optional[List[str]] = None,
+                       input_file: Optional[str] = None) -> None:
+    """Project CERRA data for all regions.
+    
+    Args:
+        dir_suffixes: Directory suffixes to combine (e.g., ['single_levels', 'single_levels_humidity'])
+        years: List of years to process (optional, if not provided processes all years)
+        input_file: Specific file to process (optional)
+    """
+    regions = ["central_europe", "iberia", "scandinavia"]
+    
+    print(f"\n{'='*70}")
+    print(f"Projecting all regions: {regions}")
+    if dir_suffixes:
+        print(f"Directory suffixes: {dir_suffixes}")
+    if years:
+        print(f"Processing years: {years}")
+    if input_file:
+        print(f"Processing file: {input_file}")
+    print(f"{'='*70}")
+    
+    for region in regions:
+        print(f"\n{'='*70}")
+        print(f"Projecting region: {region}")
+        print(f"{'='*70}")
+        
+        # Get full input directories for this region
+        remap_dirs = get_input_directories_for_region(region, dir_suffixes)
+        
+        if not remap_dirs:
+            print(f"No valid input directories found for region {region}")
+            continue
+        
+        # Project this region
+        project_cerra_data(
+            region=region,
+            remap_directories=remap_dirs,
+            years=years,
+            input_file=input_file
+        )
+    
+    print(f"\n{'='*70}")
+    print("All regions projected successfully!")
+    print(f"{'='*70}")
 
 
 def main():
@@ -215,38 +374,52 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Project time-varying data for specific years
+  # Project ALL regions for specific years
+  python project_cerra.py --years 2014 2015 \\
+    --input_directories single_levels single_levels_humidity
+  
+  # Project specific region for specific years
   python project_cerra.py --region central_europe --years 2014 2015 \\
-    --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
+    --input_directories single_levels single_levels_humidity
   
-  # Project static variables only
-  python project_cerra.py --region central_europe \\
-    --remap_directories lambert_proj/single_levels_static
+  # Project ALL regions, all years + static files
+  python project_cerra.py \\
+    --input_directories single_levels single_levels_static
   
-  # Project everything for specific years
-  python project_cerra.py --region central_europe --years 2014 2015 \\
-    --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
+  # Project specific region, all years + static files
+  python project_cerra.py --region iberia \\
+    --input_directories single_levels single_levels_static
   
-  # Project a specific file
-  python project_cerra.py --region scandinavia --input-file 2021.grib \\
-    --remap_directories lambert_proj/single_levels
+  # Project a specific file for a specific region
+  python project_cerra.py --region scandinavia --input-file orography.grib \\
+    --input_directories single_levels_static
+
+Notes:
+  - If --region is NOT provided, all regions will be projected
+  - Year files must be named YYYY.grib (e.g., 2014.grib, 2015.grib)
+  - Static files can have any other name (e.g., orography.grib)
+  - Static files are automatically included when processing directories
+  - Output files are saved as compressed NetCDF4 (.nc) format
+  - Files are saved to latlon_proj_{Region}/remapped/{directory_name}/
         """
     )
     
     parser.add_argument(
         "--region",
         type=str,
-        required=True,
+        required=False,
         choices=["central_europe", "iberia", "scandinavia"],
-        help="Target region for projection"
+        help="Target region for projection (if not provided, projects all regions)"
     )
     
     parser.add_argument(
-        "--remap_directories",
+        "--input_directories",
         nargs="+",
         type=str,
-        required=True,
-        help="List of input directories to remap (e.g., lambert_proj/single_levels)"
+        default=["single_levels"],
+        help="Directory suffixes to combine (e.g., single_levels single_levels_humidity). "
+             "Will be combined with region-specific base path automatically. "
+             "Default: ['single_levels']"
     )
     
     group = parser.add_mutually_exclusive_group()
@@ -264,16 +437,24 @@ Examples:
     
     args = parser.parse_args()
     
-    # Convert string paths to Path objects
-    remap_dirs = [Path(d) for d in args.remap_directories]
-    
     # Execute projection
-    project_cerra_data(
-        region=args.region,
-        remap_directories=remap_dirs,
-        years=args.years,
-        input_file=args.input_file
-    )
+    if args.region:
+        # Project specific region
+        remap_dirs = get_input_directories_for_region(args.region, args.input_directories)
+        
+        project_cerra_data(
+            region=args.region,
+            remap_directories=remap_dirs,
+            years=args.years,
+            input_file=args.input_file
+        )
+    else:
+        # Project all regions
+        project_all_regions(
+            dir_suffixes=args.input_directories,
+            years=args.years,
+            input_file=args.input_file
+        )
     
 
 

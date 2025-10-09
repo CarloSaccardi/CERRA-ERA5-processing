@@ -6,9 +6,9 @@ This directory contains a clean, modular pipeline for downloading, projecting, a
 
 The pipeline processes CERRA data through three main steps:
 
-1. **Download**: Download CERRA data from CDS in Lambert conformal projection
-2. **Projection**: Convert from Lambert to cylindrical (lat-lon) projection for specific regions
-3. **Preprocessing**: Extract and compute meteorological variables, save as HDF5 files for efficient PyTorch loading
+1. **Download**: Download CERRA data from CDS in Lambert conformal projection (GRIB format)
+2. **Projection**: Convert from Lambert to cylindrical (lat-lon) projection for specific regions (saves as compressed NetCDF4)
+3. **Preprocessing**: Extract and compute meteorological variables, save as NetCDF files with CF-compliant metadata
 
 ## Directory Structure
 
@@ -24,14 +24,15 @@ CERRA_processing/
 │   ├── cyl.txt                   # Central Europe coordinate file
 │   ├── cyl_iberia.txt            # Iberia coordinate file
 │   └── cyl_scandinavia.txt       # Scandinavia coordinate file
-├── lambert_proj/                  # Downloaded data (Lambert projection)
+├── lambert_proj/                  # Downloaded data (Lambert projection, GRIB format)
 │   ├── single_levels/            # Time-varying variables (2013.grib, 2014.grib, etc.)
 │   ├── single_levels_humidity/   # Humidity data (r2 variable)
 │   └── single_levels_static/     # Static variables (orography.grib, etc.)
-├── latlon_proj_*/                 # Projected data (cylindrical projection)
-│   ├── single_levels/            # Projected time-varying variables
-│   ├── single_levels_humidity/   # Projected humidity data
-│   └── single_levels_static/     # Projected static variables
+├── latlon_proj_*/                 # Projected data (cylindrical projection, NetCDF4 format)
+│   └── remapped/                 # Remapped files subdirectory
+│       ├── single_levels/        # Projected time-varying variables (2013.nc, 2014.nc, etc.)
+│       ├── single_levels_humidity/   # Projected humidity data
+│       └── single_levels_static/ # Projected static variables (orography.nc, etc.)
 ├── download_scipts/               # Download helper scripts
 ├── README.md                      # This documentation
 └── requirements.txt               # Python dependencies
@@ -108,47 +109,83 @@ done
 
 ### Step 2: Project to Lat-Lon Grid
 
-Convert from Lambert projection to cylindrical (lat-lon) projection using the `--remap_directories` argument:
+Convert from Lambert projection to cylindrical (lat-lon) projection. The script automatically:
+- Handles both year files (YYYY.grib) and static files (e.g., orography.grib)
+- Saves as compressed NetCDF4 format (.nc) for fast loading
+- Creates output in `latlon_proj_{Region}/remapped/` directory
 
 ```bash
-# Project time-varying variables for specific years
+# Project ALL regions for specific years (recommended for batch processing)
+python scripts/project_cerra.py \
+  --years 2013 2014 2015 \
+  --input_directories single_levels single_levels_humidity
+
+# Project specific region for specific years
 python scripts/project_cerra.py \
   --region central_europe \
   --years 2013 2014 2015 \
-  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
+  --input_directories single_levels single_levels_humidity
 
-# Project static variables only (no --years needed)
+# Project ALL regions, all years + static files
 python scripts/project_cerra.py \
-  --region central_europe \
-  --remap_directories lambert_proj/single_levels_static
+  --input_directories single_levels single_levels_humidity single_levels_static
 
-# Project everything at once
+# Project specific region, all years + static files
 python scripts/project_cerra.py \
-  --region central_europe \
-  --years 2013 2014 2015 \
-  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
+  --region iberia \
+  --input_directories single_levels single_levels_static
 
-# Project a specific file
+# Project a specific file for a specific region
 python scripts/project_cerra.py \
   --region scandinavia \
-  --input-file 2021.grib \
-  --remap_directories lambert_proj/single_levels
+  --input-file orography.grib \
+  --input_directories single_levels_static
 ```
 
 **Key Points:**
-- `--remap_directories`: List of directories to process (required)
-- `--years`: Process specific years (optional; if omitted, processes all .grib files)
+- `--region`: Specific region (optional; if omitted, processes ALL regions)
+- `--input_directories`: List of directory suffixes to process (e.g., `single_levels`)
+- `--years`: Process specific years (optional; if omitted, processes all year files)
 - `--input-file`: Process a specific file by name (optional)
-- Output directories are automatically created by replacing `lambert_proj` with `latlon_proj_{region}`
+- **Static files**: Automatically included when processing directories (e.g., orography.grib)
+- **Output format**: Compressed NetCDF4 (.nc) with deflate compression level 4
+- **Output location**: `latlon_proj_{Region}/remapped/{directory_name}/`
 
 ### Step 3: Preprocess Data
 
-Extract and compute meteorological variables, save as HDF5 files:
+Extract and compute meteorological variables from the projected NetCDF files, save as NetCDF with CF-compliant metadata:
 
 ```bash
-# Preprocess for a specific year
-python scripts/preprocess_cerra.py --region central_europe --year 2021 --variables base_variables
+# Preprocess ALL regions for specific year
+python scripts/preprocess_cerra.py \
+  --year 2021 \
+  --input_directories single_levels single_levels_humidity \
+  --variables all_variables
+
+# Preprocess specific region for specific year
+python scripts/preprocess_cerra.py \
+  --region central_europe \
+  --year 2021 \
+  --input_directories single_levels single_levels_humidity \
+  --variables all_variables
+
+# Preprocess ALL regions, all years
+python scripts/preprocess_cerra.py \
+  --input_directories single_levels single_levels_humidity \
+  --variables base_variables
+
+# Preprocess specific region, all years
+python scripts/preprocess_cerra.py \
+  --region iberia \
+  --input_directories single_levels single_levels_humidity \
+  --variables base_variables
 ```
+
+**Key Points:**
+- Input files are the NetCDF files (.nc) from the projection step
+- Reads from `latlon_proj_{Region}/remapped/` directories
+- Outputs to `latlon_proj_{Region}/single_levels_processed/`
+- Supports `base_variables` (u10, v10, t2m) or `all_variables` (adds sshf, zust, sp)
 
 ## Configuration
 
@@ -223,44 +260,72 @@ test_loader = data_module.test_dataloader()
 
 ### Processing Multiple Regions
 
-You can process the same data for different regions:
+Process all three regions (central_europe, iberia, scandinavia) in one command by omitting the `--region` argument:
 
 ```bash
-# Project for central Europe
+# Project ALL regions at once (recommended)
+python scripts/project_cerra.py \
+  --years 2013 2014 \
+  --input_directories single_levels single_levels_humidity
+
+# Preprocess ALL regions at once
+python scripts/preprocess_cerra.py \
+  --year 2013 \
+  --input_directories single_levels single_levels_humidity \
+  --variables all_variables
+```
+
+Or process specific regions individually:
+
+```bash
+# Project for central Europe only
 python scripts/project_cerra.py \
   --region central_europe \
   --years 2013 2014 \
-  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
+  --input_directories single_levels single_levels_humidity
 
-# Project for iberia (uses same source files)
+# Project for iberia only (uses same source files)
 python scripts/project_cerra.py \
   --region iberia \
   --years 2013 2014 \
-  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
+  --input_directories single_levels single_levels_humidity
 ```
 
 ### Custom Input Directories
 
-You can specify custom input directories for projection:
+You can specify custom absolute paths or directory suffixes:
 
 ```bash
-# Use custom directories
+# Use directory suffixes (relative to lambert_proj/)
 python scripts/project_cerra.py \
   --region central_europe \
   --years 2021 \
-  --remap_directories /path/to/custom/dir1 /path/to/custom/dir2
+  --input_directories single_levels single_levels_humidity
+
+# Use absolute paths
+python scripts/project_cerra.py \
+  --region central_europe \
+  --years 2021 \
+  --input_directories /path/to/custom/dir1 /path/to/custom/dir2
 ```
 
 ### Batch Processing
 
-Process multiple years efficiently:
+Process multiple years and regions efficiently:
 
 ```bash
-# Process years 2013-2021 in one command
+# Project ALL regions for years 2013-2021 in one command
 python scripts/project_cerra.py \
-  --region central_europe \
   --years 2013 2014 2015 2016 2017 2018 2019 2020 2021 \
-  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity
+  --input_directories single_levels single_levels_humidity single_levels_static
+
+# Preprocess ALL regions for multiple years
+for year in 2013 2014 2015 2016 2017 2018 2019 2020 2021; do
+  python scripts/preprocess_cerra.py \
+    --year $year \
+    --input_directories single_levels single_levels_humidity \
+    --variables all_variables
+done
 ```
 
 ## Adding New Variables
@@ -339,25 +404,39 @@ The scripts provide detailed output during execution. Check the console output f
 
 ### Performance Tips
 
-1. **Parallel processing**: Process multiple years in separate terminal sessions
-2. **Storage**: Ensure sufficient disk space (CERRA files are large)
-3. **Memory**: Use systems with adequate RAM for large datasets
-4. **HDF5 efficiency**: HDF5 format provides faster loading and better memory efficiency than individual .npy files
-5. **Background processing**: Use `nohup` for long-running downloads to prevent interruption
+1. **NetCDF4 compressed format**: Projected files use NetCDF4 with deflate compression
+   - ~70-80% smaller than uncompressed (e.g., 11 GB → 1-2 GB per year)
+   - ~10-100x faster loading than GRIB format
+   - Native xarray support for efficient lazy loading
+2. **Parallel processing**: Process multiple years in separate terminal sessions
+3. **Multi-region processing**: Use commands without `--region` to process all regions at once
+4. **Storage**: NetCDF4 compression significantly reduces disk space requirements
+5. **Memory**: Use systems with adequate RAM for large datasets
+6. **Background processing**: Use `nohup` for long-running downloads to prevent interruption
 
 ## File Naming and Organization
 
-### Download Files
+### Downloaded Files (GRIB format)
 
-- **Lambert projection files**: `{year}.grib` (e.g., `2013.grib`)
+- **Year files**: `{year}.grib` (e.g., `2013.grib`, `2014.grib`)
+- **Static files**: `orography.grib`, etc.
 - **Log files**: `{year}.log` (e.g., `2013.log`)
-- **Location**: `lambert_proj/` directory
+- **Location**: `lambert_proj/{directory}/` (e.g., `lambert_proj/single_levels/`)
 
-### Processed Files
+### Projected Files (NetCDF4 format)
 
-- **HDF5 data files**: `{region}_cerra_data.h5`
-- **HDF5 static files**: `{region}_cerra_static.h5`
-- **Location**: `data/{region}/CERRA/samples/` directory
+- **Year files**: `{year}.nc` (e.g., `2013.nc`, `2014.nc`)
+- **Static files**: `orography.nc`, etc.
+- **Format**: Compressed NetCDF4 with deflate level 4
+- **Location**: `latlon_proj_{Region}/remapped/{directory}/` 
+  - Example: `latlon_proj_CentralEurope/remapped/single_levels/2013.nc`
+
+### Processed Files (NetCDF format)
+
+- **Data files**: `{RegionName}_{year}_cerra.nc` (e.g., `CentralEurope_2013_cerra.nc`)
+- **Static files**: `{RegionName}_static_cerra.nc` (e.g., `CentralEurope_static_cerra.nc`)
+- **Format**: NetCDF4 with CF-compliant metadata
+- **Location**: `latlon_proj_{Region}/single_levels_processed/`
 
 ### Complete Workflow Example
 
@@ -374,21 +453,30 @@ mv lambert_proj/single_levels/orography.grib lambert_proj/single_levels_static/
 mkdir -p lambert_proj/single_levels_humidity
 grib_copy -w year=2013 download_scipts/humidity_2013_15.grib lambert_proj/single_levels_humidity/2013.grib
 
-# 4. Project for central Europe
+# 4. Project ALL regions at once (central_europe, iberia, scandinavia)
+#    Output: latlon_proj_{Region}/remapped/{directory}/*.nc (compressed NetCDF4)
+python scripts/project_cerra.py \
+  --years 2013 \
+  --input_directories single_levels single_levels_humidity single_levels_static
+
+# 5. Preprocess ALL regions at once
+#    Output: latlon_proj_{Region}/single_levels_processed/*.nc
+python scripts/preprocess_cerra.py \
+  --year 2013 \
+  --input_directories single_levels single_levels_humidity \
+  --variables all_variables
+
+# Alternative: Process specific regions only
 python scripts/project_cerra.py \
   --region central_europe \
   --years 2013 \
-  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
+  --input_directories single_levels single_levels_humidity single_levels_static
 
-# 5. Project for iberia (from same downloaded files)
-python scripts/project_cerra.py \
-  --region iberia \
-  --years 2013 \
-  --remap_directories lambert_proj/single_levels lambert_proj/single_levels_humidity lambert_proj/single_levels_static
-
-# 6. Preprocess for each region
-python scripts/preprocess_cerra.py --region central_europe --year 2013 --variables base_variables
-python scripts/preprocess_cerra.py --region iberia --year 2013 --variables base_variables
+python scripts/preprocess_cerra.py \
+  --region central_europe \
+  --year 2013 \
+  --input_directories single_levels single_levels_humidity \
+  --variables base_variables
 ```
 
 ## Data Quality
