@@ -4,4 +4,5 @@
 *.idx
 *.json
 *.pyc
+*.png
 CERRA_processing/download_scipts/*
