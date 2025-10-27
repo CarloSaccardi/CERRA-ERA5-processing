@@ -91,7 +91,7 @@ class VariableAnalyzer:
         return ds
     
     def extract_variable_values(self, ds: xr.Dataset) -> np.ndarray:
-        """Extract variable values as flat array.
+        """Extract variable values using streaming processing for large files.
         
         Args:
             ds: Dataset containing variable data
@@ -99,23 +99,112 @@ class VariableAnalyzer:
         Returns:
             Flattened array of variable values
         """
-        # Convert to numpy array and flatten
-        var_values = ds[self.variable].values.flatten()
+        chunk_size = 100
+        time_chunks = np.arange(0, len(ds.time), chunk_size)
         
-        # Remove any NaN values
-        var_values = var_values[~np.isnan(var_values)]
+        print(f"  Processing {len(time_chunks)} chunks of size {chunk_size}")
         
-        # Apply percentile clipping if requested
-        if self.clip_percentiles:
-            p1 = np.percentile(var_values, 1)
-            p99 = np.percentile(var_values, 99)
+        # First pass: collect samples for percentile computation
+        sample_values = []
+        total_values = 0
+        
+        for i, start_idx in enumerate(time_chunks):
+            end_idx = min(start_idx + chunk_size, len(ds.time))
+            chunk_data = ds.isel(time=slice(start_idx, end_idx))
+            var_values = chunk_data[self.variable].values.flatten()
+            
+            # Filter NaNs
+            valid_mask = ~np.isnan(var_values)
+            valid_values = var_values[valid_mask]
+            
+            if len(valid_values) > 0:
+                total_values += len(valid_values)
+                
+                # Collect sample for percentile computation
+                if len(sample_values) < 100000:  # Sample size limit
+                    sample_size = min(len(valid_values), 100000 - len(sample_values))
+                    if sample_size > 0:
+                        indices = np.random.choice(len(valid_values), sample_size, replace=False)
+                        sample_values.append(valid_values[indices])
+            
+            print(f"    Chunk {i+1}/{len(time_chunks)}: {len(valid_values):,} values")
+        
+        print(f"  Total values extracted: {total_values:,}")
+        
+        # Compute percentiles from sample
+        if self.clip_percentiles and sample_values:
+            print("  Computing percentiles from sample...")
+            combined_sample = np.concatenate(sample_values)
+            p1 = np.percentile(combined_sample, 1)
+            p99 = np.percentile(combined_sample, 99)
             print(f"  Clipping percentiles: {p1:.2f} to {p99:.2f}")
-            var_values = np.clip(var_values, p1, p99)
+        else:
+            p1, p99 = None, None
         
-        return var_values
+        # Second pass: process chunks and apply clipping
+        # Use pre-allocation to avoid concatenation
+        final_values = np.empty(total_values, dtype=np.float32)
+        current_idx = 0
+        
+        for i, start_idx in enumerate(time_chunks):
+            end_idx = min(start_idx + chunk_size, len(ds.time))
+            chunk_data = ds.isel(time=slice(start_idx, end_idx))
+            var_values = chunk_data[self.variable].values.flatten()
+            
+            # Filter NaNs
+            valid_mask = ~np.isnan(var_values)
+            valid_values = var_values[valid_mask]
+            
+            if len(valid_values) > 0:
+                # Apply clipping if requested
+                if self.clip_percentiles and p1 is not None and p99 is not None:
+                    valid_values = np.clip(valid_values, p1, p99)
+                
+                # Copy to pre-allocated array
+                end_idx = current_idx + len(valid_values)
+                final_values[current_idx:end_idx] = valid_values
+                current_idx = end_idx
+            
+            print(f"    Processing chunk {i+1}/{len(time_chunks)}: {len(valid_values):,} values")
+        
+        return final_values
+    
+    def _compute_percentiles_incremental(self, value_chunks: list, percentiles: list) -> list:
+        """Compute percentiles incrementally across chunks.
+        
+        Args:
+            value_chunks: List of numpy arrays containing values
+            percentiles: List of percentile values to compute (e.g., [1, 99])
+            
+        Returns:
+            List of computed percentiles
+        """
+        # Use a sample-based approach for large datasets
+        sample_size = min(100000, sum(len(chunk) for chunk in value_chunks))
+        
+        # Collect a representative sample
+        sample_values = []
+        current_sample_size = 0
+        
+        for chunk in value_chunks:
+            if current_sample_size >= sample_size:
+                break
+            
+            # Take a random sample from this chunk
+            chunk_sample_size = min(len(chunk), sample_size - current_sample_size)
+            if chunk_sample_size > 0:
+                indices = np.random.choice(len(chunk), chunk_sample_size, replace=False)
+                sample_values.append(chunk[indices])
+                current_sample_size += chunk_sample_size
+        
+        # Compute percentiles on the sample
+        combined_sample = np.concatenate(sample_values)
+        computed_percentiles = [np.percentile(combined_sample, p) for p in percentiles]
+        
+        return computed_percentiles
     
     def normalize_variable(self, var_values: np.ndarray) -> np.ndarray:
-        """Normalize variable values to [0, 1] range.
+        """Normalize variable values to [0, 1] range using incremental statistics.
         
         Args:
             var_values: Raw variable values
@@ -123,15 +212,53 @@ class VariableAnalyzer:
         Returns:
             Normalized variable values
         """
-        var_min = var_values.min()
-        var_max = var_values.max()
+        # For large datasets, use incremental min/max computation
+        if len(var_values) > 100000:
+            print("  Computing normalization statistics incrementally...")
+            var_min, var_max = self._compute_min_max_incremental(var_values)
+        else:
+            # For smaller datasets, use full array
+            var_min = var_values.min()
+            var_max = var_values.max()
         
+        print(f"  Normalization range: {var_min:.2f} to {var_max:.2f}")
+        
+        # Apply normalization
         normalized = (var_values - var_min) / (var_max - var_min)
         
         return normalized, var_min, var_max
     
+    def _compute_min_max_incremental(self, var_values: np.ndarray, chunk_size: int = 10000) -> tuple:
+        """Compute min/max incrementally for large arrays.
+        
+        Args:
+            var_values: Array of values
+            chunk_size: Size of chunks to process
+            
+        Returns:
+            Tuple of (min_value, max_value)
+        """
+        var_min = float('inf')
+        var_max = float('-inf')
+        
+        # Process in chunks
+        for i in range(0, len(var_values), chunk_size):
+            end_idx = min(i + chunk_size, len(var_values))
+            chunk = var_values[i:end_idx]
+            
+            chunk_min = chunk.min()
+            chunk_max = chunk.max()
+            
+            var_min = min(var_min, chunk_min)
+            var_max = max(var_max, chunk_max)
+            
+            if i % (chunk_size * 10) == 0:  # Progress every 10 chunks
+                print(f"    Processed {i:,}/{len(var_values):,} values")
+        
+        return var_min, var_max
+    
     def calculate_statistics(self, var_values: np.ndarray) -> Dict:
-        """Calculate statistical measures for variable data.
+        """Calculate statistical measures for variable data using incremental computation.
         
         Args:
             var_values: Variable values
@@ -139,17 +266,83 @@ class VariableAnalyzer:
         Returns:
             Dictionary of statistical measures
         """
+        # For large datasets, use incremental computation
+        if len(var_values) > 100000:
+            print("  Computing statistics incrementally...")
+            stats_dict = self._compute_statistics_incremental(var_values)
+        else:
+            # For smaller datasets, use full array
+            stats_dict = {
+                'count': len(var_values),
+                'mean': np.mean(var_values),
+                'std': np.std(var_values),
+                'min': np.min(var_values),
+                'max': np.max(var_values),
+                'median': np.median(var_values),
+                'q25': np.percentile(var_values, 25),
+                'q75': np.percentile(var_values, 75),
+                'skewness': stats.skew(var_values),
+                'kurtosis': stats.kurtosis(var_values)
+            }
+        
+        return stats_dict
+    
+    def _compute_statistics_incremental(self, var_values: np.ndarray, chunk_size: int = 10000) -> Dict:
+        """Compute statistics incrementally for large arrays.
+        
+        Args:
+            var_values: Array of values
+            chunk_size: Size of chunks to process
+            
+        Returns:
+            Dictionary of statistical measures
+        """
+        # Basic statistics that can be computed incrementally
+        count = len(var_values)
+        min_val = float('inf')
+        max_val = float('-inf')
+        sum_val = 0.0
+        
+        # Welford's algorithm for exact std computation
+        mean_val = 0.0
+        M2 = 0.0  # Sum of squared differences from mean
+        
+        # Process in chunks
+        for i in range(0, len(var_values), chunk_size):
+            end_idx = min(i + chunk_size, len(var_values))
+            chunk = var_values[i:end_idx]
+            
+            # Update running statistics
+            min_val = min(min_val, chunk.min())
+            max_val = max(max_val, chunk.max())
+            sum_val += chunk.sum()
+            
+            # Welford's algorithm for mean and variance
+            for value in chunk:
+                delta = value - mean_val
+                mean_val += delta / count
+                delta2 = value - mean_val
+                M2 += delta * delta2            
+        
+        # Compute final statistics
+        std_val = np.sqrt(M2 / count) if count > 1 else 0.0
+        
+        # For percentiles and higher moments, use sampling
+        sample_size = min(100000, count)
+        sample_indices = np.random.choice(count, sample_size, replace=False)
+        sample_values = var_values[sample_indices]
+        
         stats_dict = {
-            'count': len(var_values),
-            'mean': np.mean(var_values),
-            'std': np.std(var_values),
-            'min': np.min(var_values),
-            'max': np.max(var_values),
-            'median': np.median(var_values),
-            'q25': np.percentile(var_values, 25),
-            'q75': np.percentile(var_values, 75),
-            'skewness': stats.skew(var_values),
-            'kurtosis': stats.kurtosis(var_values)
+            'count': count,
+            'mean': mean_val,
+            'std': std_val,
+            'min': min_val,
+            'max': max_val,
+            'median': np.median(sample_values),  # Sample-based
+            'q25': np.percentile(sample_values, 25),  # Sample-based
+            'q75': np.percentile(sample_values, 75),  # Sample-based
+            'skewness': stats.skew(sample_values),  # Sample-based
+            'kurtosis': stats.kurtosis(sample_values)  # Sample-based
         }
         
         return stats_dict
