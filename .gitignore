@@ -6,3 +6,4 @@
 *.pyc
 *.png
 CERRA_processing/download_scipts/*
+ERA5_download/allEurope/*

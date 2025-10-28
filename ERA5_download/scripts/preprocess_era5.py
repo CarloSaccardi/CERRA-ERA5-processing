@@ -460,7 +460,7 @@ Examples:
         "--region",
         type=str,
         required=False,
-        choices=["central_europe", "iberia", "scandinavia"],
+        choices=["central_europe", "iberia", "scandinavia", "allEurope"],
         help="Target region for processing"
     )
     
