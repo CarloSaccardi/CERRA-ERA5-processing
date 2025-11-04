@@ -273,8 +273,15 @@ class ERA5ProcessorNetCDF:
         print("Processing static variables...")
         
         # Load geopotential
-        ds = xr.open_dataset(geopotential_file, engine='cfgrib')
-        geop = ds['z'].values  # (height, width)
+        ds = xr.open_dataset(geopotential_file)
+
+        # Check dimensions and extract the 2D numpy array
+        if ds['z'].ndim == 2:
+            print("Data is 2D (static).")
+            geop = ds['z'].values  # Shape is already (latitude, longitude)
+        else:
+            print("Data is 3D (or more). Slicing 'valid_time=0'.")
+            geop = ds['z'].isel(valid_time=0).values
         
         # Create static NetCDF file
         static_filename = f"{self.region_config['name']}_static_era5.nc"
@@ -285,7 +292,7 @@ class ERA5ProcessorNetCDF:
             geop,
             coords={
                 'latitude': ds.latitude,
-                'longitude': ds.longitude
+                'longitude': ds.longitude,
             },
             dims=['latitude', 'longitude'],
             attrs={
@@ -460,7 +467,7 @@ Examples:
         "--region",
         type=str,
         required=False,
-        choices=["central_europe", "iberia", "scandinavia", "allEurope"],
+        choices=["central_europe", "iberia", "scandinavia", "eurasia"],
         help="Target region for processing"
     )
     

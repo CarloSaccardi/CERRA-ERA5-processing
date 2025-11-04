@@ -6,4 +6,5 @@
 *.pyc
 *.png
 CERRA_processing/download_scipts/*
-ERA5_download/allEurope/*
+ERA5_download/Eurasia/*
+z_data_analysis/*

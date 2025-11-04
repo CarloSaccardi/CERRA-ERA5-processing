@@ -18,16 +18,16 @@ def plotting(array):
     # plt.imshow(array, cmap='terrain', origin='lower')
     plt.imshow(array, cmap='terrain')
 
-    # Add a color bar to show the scale of the values
-    plt.colorbar(label='Orography Value')
+    # Add a color bar to show the scale of the values m2 s-2
+    plt.colorbar(label='m2 s-2')
 
     # Add a title and labels (optional, but good practice)
-    plt.title('Orography Data (Corrected Orientation)')
-    plt.xlabel('X Index')
-    plt.ylabel('Y Index')
+    plt.title('Geopotential')
+    
+    plt.axis('off')
 
     # Save the plot to a file
-    output_filename = 'orog_plot_corrected.png'
+    output_filename = 'ERA5_Iberia.png'
     plt.savefig(output_filename)
 
     # Close the plot to free up memory
@@ -38,10 +38,11 @@ def plotting(array):
 
 if __name__ == "__main__":
     # Load the dataset
-    ds = xr.open_dataset("ERA5_download/allEurope/single_levels/2013.grib")
+    ds = xr.open_dataset("zz_processed_data/ERA5/test/static_Iberia.nc")
 
     # Extract the 'orog' variable
-    orog_values = ds['z'].values #(1, H, W) -> (H, W)
+    # Select the 'z' variable, then select the 0th index from the 'valid_time' dimension
+    orog_values = ds["geopotential"].values
     # orog_values = orog_values.squeeze()  # Remove singleton dimensions if any
 
     # Call the plotting function with the extracted data

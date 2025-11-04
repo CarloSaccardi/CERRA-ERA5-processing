@@ -67,6 +67,11 @@ REGIONS = {
         "name": "Scandinavia",
         "area": [70, 24, 50, 44],  # [North, West, South, East]
         "description": "Scandinavia region"
+    },
+    "eurasia": {
+        "name": "Eurasia",
+        "area": [78, -20, 14, 80],  # [North, West, South, East]
+        "description": "Entire Europe region"
     }
 }
 
